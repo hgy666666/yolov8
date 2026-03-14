@@ -1,0 +1,5 @@
+[default]
+entity = 3503562089
+project = ultralytics-main
+base_url = https://api.wandb.ai
+

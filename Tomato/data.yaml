@@ -1,0 +1,15 @@
+names:
+- Early Blight
+- Healthy
+- Late Blight
+- Leaf Miner
+- Leaf Mold
+- Mosaic Virus
+- Septoria
+- Spider Mites
+- Yellow Leaf Curl Virus
+nc: 9
+
+test:  C:\Users\35035\Desktop\ultralytics-main\Tomato\\test\\images
+train: C:\Users\35035\Desktop\ultralytics-main\Tomato\\train\\images
+val: C:\Users\35035\Desktop\ultralytics-main\Tomato\\valid\\images
