@@ -1,6 +1,5 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
 """Block modules."""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -37,6 +36,8 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
+    "C2f_CA",  # 新增自定义模块到全局导出列表
+    "CAAttention"
 )
 
 
@@ -684,3 +685,48 @@ class CBFuse(nn.Module):
         res = [F.interpolate(x[self.idx[i]], size=target_size, mode="nearest") for i, x in enumerate(xs[:-1])]
         out = torch.sum(torch.stack(res + xs[-1:]), dim=0)
         return out
+
+
+class CAAttention(nn.Module):
+    """Coordinate Attention (CA) 注意力机制，强化小目标特征提取"""
+    def __init__(self, channel, reduction=16):
+        super().__init__()
+        self.avg_pool_h = nn.AdaptiveAvgPool2d((None, 1))  # 水平方向池化
+        self.avg_pool_w = nn.AdaptiveAvgPool2d((1, None))  # 垂直方向池化
+        mid = max(8, channel // reduction)  # 压缩通道数，避免维度过小
+        self.conv = nn.Sequential(
+            nn.Conv2d(channel, mid, 1, bias=False),
+            nn.BatchNorm2d(mid),
+            nn.SiLU(),
+            nn.Conv2d(mid, channel, 1, bias=False),
+            nn.BatchNorm2d(channel),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, h, w = x.shape  # 修复维度解析
+        fh = self.avg_pool_h(x)
+        fw = self.avg_pool_w(x)
+        return x * self.conv(fh + fw)  # 注意力权重加权原始特征
+
+
+class C2f_CA(nn.Module):
+    """嵌入CA注意力的C2f模块，适配YOLOv8n轻量化版本"""
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
+        super().__init__()
+        self.c = int(c2 * e)  # 隐藏层通道数，与原版C2f对齐
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        # 与原版C2f保持一致的Bottleneck结构，避免兼容性问题
+        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.add = shortcut and c1 == c2
+        self.ca = CAAttention(c2)  # 嵌入CA注意力
+
+    def forward(self, x):
+        identity = x
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        x = self.cv2(torch.cat(y, 1))
+        if self.add:
+            x = x + identity
+        return self.ca(x)  # 最后通过CA注意力强化特征

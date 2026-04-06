@@ -1,4 +1,6 @@
 # Ultralytics YOLO 🚀, AGPL-3.0 license
+# 新增：导入自定义模块
+
 """
 Ultralytics modules.
 
@@ -46,6 +48,8 @@ from .block import (
     RepNCSPELAN4,
     ResNetLayer,
     Silence,
+    C2f_CA,
+    CAAttention,
 )
 from .conv import (
     CBAM,
@@ -135,4 +139,8 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
+    "C2f_CA",
+    "CAAttention",
 )
+
+

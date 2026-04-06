@@ -35,11 +35,9 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
 
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
-
-    default_act = nn.SiLU()  # default activation
+    default_act = nn.SiLU()
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
-        """Initialize Conv layer with given arguments including activation."""
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
         self.bn = nn.BatchNorm2d(c2)
@@ -72,10 +70,11 @@ class Conv2(Conv):
 
     def fuse_convs(self):
         """Fuse parallel convolutions."""
-        w = torch.zeros_like(self.conv.weight.data)
+        w = torch.zeros_like(self.conv.weight.data) if hasattr(self.conv, 'weight') else torch.zeros((self.cv2.out_channels, self.cv2.in_channels // self.cv2.groups, 3, 3), device=self.cv2.weight.device)
         i = [x // 2 for x in w.shape[2:]]
         w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
-        self.conv.weight.data += w
+        if hasattr(self.conv, 'weight'):
+            self.conv.weight.data += w
         self.__delattr__("cv2")
         self.forward = self.forward_fuse
 
@@ -155,21 +154,29 @@ class Focus(nn.Module):
 
 
 class GhostConv(nn.Module):
-    """Ghost Convolution https://github.com/huawei-noah/ghostnet."""
-
+    """
+    Ghost Convolution (Official implementation + compatibility fix)
+    https://github.com/huawei-noah/ghostnet
+    """
     def __init__(self, c1, c2, k=1, s=1, g=1, act=True):
-        """Initializes the GhostConv object with input channels, output channels, kernel size, stride, groups and
-        activation.
-        """
         super().__init__()
         c_ = c2 // 2  # hidden channels
-        self.cv1 = Conv(c1, c_, k, s, None, g, act=act)
-        self.cv2 = Conv(c_, c_, 5, 1, None, c_, act=act)
+        # 主卷积分支：1x1卷积压缩通道
+        self.conv = nn.Conv2d(c1, c_, k, s, autopad(k), groups=g, bias=False)
+        self.bn = nn.BatchNorm2d(c_)
+        self.act = nn.SiLU() if act else nn.Identity()
+        # Ghost分支：深度卷积生成冗余特征
+        self.ghost = nn.Sequential(
+            nn.Conv2d(c_, c2 - c_, 3, 1, 1, groups=c_, bias=False),
+            nn.BatchNorm2d(c2 - c_),
+            nn.SiLU() if act else nn.Identity()
+        )
 
     def forward(self, x):
-        """Forward propagation through a Ghost Bottleneck layer with skip connection."""
-        y = self.cv1(x)
-        return torch.cat((y, self.cv2(y)), 1)
+        """Forward pass: main conv + ghost branch + concat"""
+        x1 = self.act(self.bn(self.conv(x)))
+        x2 = self.ghost(x1)
+        return torch.cat([x1, x2], 1)
 
 
 class RepConv(nn.Module):
@@ -223,7 +230,8 @@ class RepConv(nn.Module):
         if branch is None:
             return 0, 0
         if isinstance(branch, Conv):
-            kernel = branch.conv.weight
+            # 适配GhostConv的权重获取
+            kernel = branch.conv.conv.weight if hasattr(branch.conv, 'conv') else branch.conv.weight
             running_mean = branch.bn.running_mean
             running_var = branch.bn.running_var
             gamma = branch.bn.weight
@@ -252,13 +260,13 @@ class RepConv(nn.Module):
             return
         kernel, bias = self.get_equivalent_kernel_bias()
         self.conv = nn.Conv2d(
-            in_channels=self.conv1.conv.in_channels,
-            out_channels=self.conv1.conv.out_channels,
-            kernel_size=self.conv1.conv.kernel_size,
-            stride=self.conv1.conv.stride,
-            padding=self.conv1.conv.padding,
-            dilation=self.conv1.conv.dilation,
-            groups=self.conv1.conv.groups,
+            in_channels=self.conv1.conv.conv.in_channels if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.in_channels,
+            out_channels=self.conv1.conv.conv.out_channels if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.out_channels,
+            kernel_size=self.conv1.conv.conv.kernel_size if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.kernel_size,
+            stride=self.conv1.conv.conv.stride if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.stride,
+            padding=self.conv1.conv.conv.padding if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.padding,
+            dilation=self.conv1.conv.conv.dilation if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.dilation,
+            groups=self.conv1.conv.conv.groups if hasattr(self.conv1.conv, 'conv') else self.conv1.conv.groups,
             bias=True,
         ).requires_grad_(False)
         self.conv.weight.data = kernel
