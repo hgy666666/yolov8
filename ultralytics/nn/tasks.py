@@ -23,6 +23,7 @@ from ultralytics.nn.modules import (
     C2f,
     C2fAttn,
     C2f_CA,
+    C2f_ECA,
     C3Ghost,
     C3x,
     CBFuse,
@@ -33,6 +34,7 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
+    DetectLiteDecoupled,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -876,6 +878,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2,
             C2f,
             C2f_CA,
+            C2f_ECA,
             RepNCSPELAN4,
             ADown,
             SPPELAN,
@@ -898,7 +901,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 )  # num heads
 
             args = [c1, c2, *args[1:]]
-            if m in {BottleneckCSP, C1, C2, C2f, C2f_CA, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3}:
+            if m in {BottleneckCSP, C1, C2, C2f, C2f_CA, C2f_ECA, C2fAttn, C3, C3TR, C3Ghost, C3x, RepC3}:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is AIFI:
@@ -915,7 +918,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
+        elif m in {Detect, DetectLiteDecoupled, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)

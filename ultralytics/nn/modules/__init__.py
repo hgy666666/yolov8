@@ -48,6 +48,8 @@ from .block import (
     RepNCSPELAN4,
     ResNetLayer,
     Silence,
+    C2f_ECA,
+    ECAAttention,
     C2f_CA,
     CAAttention,
 )
@@ -66,7 +68,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect
+from .head import OBB, Classify, Detect, DetectLiteDecoupled, Pose, RTDETRDecoder, Segment, WorldDetect
 from .transformer import (
     AIFI,
     MLP,
@@ -116,6 +118,7 @@ __all__ = (
     "BottleneckCSP",
     "Proto",
     "Detect",
+    "DetectLiteDecoupled",
     "Segment",
     "Pose",
     "Classify",
@@ -139,6 +142,8 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
+    "C2f_ECA",
+    "ECAAttention",
     "C2f_CA",
     "CAAttention",
 )

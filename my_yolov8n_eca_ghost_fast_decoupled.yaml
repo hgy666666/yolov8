@@ -1,0 +1,38 @@
+task: detect
+nc: 1
+scales:
+  n: [0.33, 0.25, 1024]
+
+# FAST + decoupled-lite head variant:
+# - Same backbone/neck as `my_yolov8n_eca_ghost_fast.yaml`
+# - Replace Detect with a lightweight decoupled head to cut head compute
+
+backbone:
+  - [-1, 1, GhostConv, [64, 3, 2]]
+  - [-1, 1, GhostConv, [128, 3, 2]]
+  - [-1, 1, C2f, [128, True]]
+  - [-1, 1, GhostConv, [256, 3, 2]]
+  - [-1, 2, C2f, [256, True]]
+  - [-1, 1, GhostConv, [512, 3, 2]]
+  - [-1, 2, C2f_ECA, [512, True]]
+  - [-1, 1, GhostConv, [1024, 3, 2]]
+  - [-1, 1, C2f_CA, [1024, True]]
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [256]]
+
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 1, C2f, [128]]
+
+  - [-1, 1, GhostConv, [256, 3, 2]]
+  - [[-1, 11], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [256]]
+
+  - [-1, 1, GhostConv, [512, 3, 2]]
+  - [[-1, 8], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [512]]
+
+  - [[14, 17, 20], 1, DetectLiteDecoupled, [nc]]

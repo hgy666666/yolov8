@@ -37,7 +37,9 @@ __all__ = (
     "CBLinear",
     "Silence",
     "C2f_CA",  # 新增自定义模块到全局导出列表
-    "CAAttention"
+    "CAAttention",
+    "ECAAttention",
+    "C2f_ECA",
 )
 
 
@@ -710,6 +712,29 @@ class CAAttention(nn.Module):
         return x * self.conv(fh + fw)  # 注意力权重加权原始特征
 
 
+class ECAAttention(nn.Module):
+    """
+    Efficient Channel Attention (ECA).
+    Very lightweight channel attention suitable for edge devices.
+    Paper: "ECA-Net: Efficient Channel Attention for Deep Convolutional Neural Networks"
+    """
+
+    def __init__(self, channels: int, k_size: int = 3):
+        super().__init__()
+        k_size = int(k_size)
+        if k_size % 2 == 0:
+            k_size += 1  # ensure odd kernel
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.pool(x)  # (B, C, 1, 1)
+        y = self.conv(y.squeeze(-1).transpose(-1, -2))  # (B, 1, C)
+        y = self.act(y).transpose(-1, -2).unsqueeze(-1)  # (B, C, 1, 1)
+        return x * y
+
+
 class C2f_CA(nn.Module):
     """嵌入CA注意力的C2f模块，适配YOLOv8n轻量化版本"""
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
@@ -730,3 +755,25 @@ class C2f_CA(nn.Module):
         if self.add:
             x = x + identity
         return self.ca(x)  # 最后通过CA注意力强化特征
+
+
+class C2f_ECA(nn.Module):
+    """C2f module with ECA attention for edge-friendly speed/accuracy tradeoff."""
+
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k_size=3):
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1, 1)
+        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
+        self.add = shortcut and c1 == c2
+        self.eca = ECAAttention(c2, k_size=k_size)
+
+    def forward(self, x):
+        identity = x
+        y = list(self.cv1(x).split((self.c, self.c), 1))
+        y.extend(m(y[-1]) for m in self.m)
+        x = self.cv2(torch.cat(y, 1))
+        if self.add:
+            x = x + identity
+        return self.eca(x)

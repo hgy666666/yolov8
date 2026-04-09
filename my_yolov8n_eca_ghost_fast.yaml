@@ -1,0 +1,38 @@
+nc: 1
+scales:
+  n: [0.33, 0.25, 1024]
+
+# FAST variant (speed priority, higher risk to accuracy):
+# - Further reduce repeats in early/high-resolution stages
+# - Use cheaper ECA attention in neck/head
+# - Slimmer neck/head channels (effective channels after width=0.25 become very small)
+
+backbone:
+  - [-1, 1, GhostConv, [64, 3, 2]]
+  - [-1, 1, GhostConv, [128, 3, 2]]
+  - [-1, 1, C2f, [128, True]]
+  - [-1, 1, GhostConv, [256, 3, 2]]
+  - [-1, 2, C2f, [256, True]]
+  - [-1, 1, GhostConv, [512, 3, 2]]
+  - [-1, 2, C2f_ECA, [512, True]]
+  - [-1, 1, GhostConv, [1024, 3, 2]]
+  - [-1, 1, C2f_CA, [1024, True]]
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [256]]
+
+  - [-1, 1, nn.Upsample, [None, 2, 'nearest']]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 1, C2f, [128]]
+
+  - [-1, 1, GhostConv, [256, 3, 2]]
+  - [[-1, 11], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [256]]
+
+  - [-1, 1, GhostConv, [512, 3, 2]]
+  - [[-1, 8], 1, Concat, [1]]
+  - [-1, 1, C2f_ECA, [512]]
+
+  - [[14, 17, 20], 1, Detect, [nc]]

@@ -14,7 +14,7 @@ from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
+__all__ = "Detect", "DetectLiteDecoupled", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
 
 
 class Detect(nn.Module):
@@ -87,6 +87,90 @@ class Detect(nn.Module):
     def decode_bboxes(self, bboxes, anchors):
         """Decode bounding boxes."""
         return dist2bbox(bboxes, anchors, xywh=True, dim=1)
+
+
+class DetectLiteDecoupled(Detect):
+    """
+    Lightweight decoupled Detect head (speed-priority).
+
+    - Keeps the same output contract as `Detect` so the rest of Ultralytics pipeline works unchanged.
+    - Uses a cheaper stem + depthwise separable conv in cls/reg branches.
+    """
+
+    def __init__(self, nc=80, ch=(), reg_max=16, width_mult=0.5):
+        super(Detect, self).__init__()
+        self.nc = nc
+        self.nl = len(ch)
+        self.reg_max = reg_max
+        self.no = nc + self.reg_max * 4
+        self.stride = torch.zeros(self.nl)
+
+        # Channels: keep them small to reduce head cost (important for edge CPU).
+        # c2: reg branch hidden, c3: cls branch hidden
+        base = ch[0] if len(ch) else 256
+        c2 = max(16, int((self.reg_max * 4) * 1.0 * width_mult))
+        c3 = max(16, int(min(max(base // 2, 32), 128) * width_mult))
+
+        def dw_pw(c_in, c_out):
+            # Depthwise 3x3 then pointwise 1x1
+            return nn.Sequential(
+                nn.Conv2d(c_in, c_in, 3, 1, 1, groups=c_in, bias=False),
+                nn.BatchNorm2d(c_in),
+                nn.SiLU(),
+                nn.Conv2d(c_in, c_out, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(c_out),
+                nn.SiLU(),
+            )
+
+        self.stem = nn.ModuleList(Conv(x, max(16, int(x * width_mult)), 1) for x in ch)
+        self.reg = nn.ModuleList(
+            nn.Sequential(dw_pw(max(16, int(x * width_mult)), c2), nn.Conv2d(c2, 4 * self.reg_max, 1))
+            for x in ch
+        )
+        self.cls = nn.ModuleList(
+            nn.Sequential(dw_pw(max(16, int(x * width_mult)), c3), nn.Conv2d(c3, self.nc, 1)) for x in ch
+        )
+        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+
+    def forward(self, x):
+        for i in range(self.nl):
+            xi = self.stem[i](x[i])
+            x[i] = torch.cat((self.reg[i](xi), self.cls[i](xi)), 1)
+        if self.training:
+            return x
+
+        # Inference path matches Detect.forward
+        shape = x[0].shape
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        if self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+
+        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
+            box = x_cat[:, : self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4 :]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
+        if self.export and self.format in {"tflite", "edgetpu"}:
+            grid_h = shape[2]
+            grid_w = shape[3]
+            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
+            norm = self.strides / (self.stride[0] * grid_size)
+            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
+        else:
+            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+
+        y = torch.cat((dbox, cls.sigmoid()), 1)
+        return y if self.export else (y, x)
+
+    def bias_init(self):
+        """Initialize head biases, requires stride availability."""
+        for a, b, s in zip(self.reg, self.cls, self.stride):
+            # box
+            a[-1].bias.data[:] = 1.0
+            # cls
+            b[-1].bias.data[: self.nc] = math.log(5 / self.nc / (640 / s) ** 2)
 
 
 class Segment(Detect):
